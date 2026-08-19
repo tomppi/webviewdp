@@ -3,25 +3,36 @@
 A minimal Android WebView app that opens your DeepSeek Harness web UI over a
 Tailscale tailnet, giving you a dedicated app instead of the phone browser.
 
+On first launch it shows a setup screen where you paste your harness URL
+(the Tailscale `https://<machine>.<tailnet>.ts.net/` address). The URL is
+stored on the device, so subsequent launches go straight to the harness.
+
 ## Requirements
 
-- Android Studio (with JDK 17+).
 - The [Tailscale](https://tailscale.com/) app installed and connected on the
   phone. The WebView relies on the Tailscale VPN for MagicDNS and tailnet
   routing; no exit node is needed.
 - A device running Android 8.0 (API 26) or newer.
 
-## Build and install
+## Download a build
+
+GitHub Actions builds a debug APK on every push to `main` (and on manual
+`workflow_dispatch` runs):
+
+1. Go to the repo's **Actions** tab and open the latest **Build APK** run.
+2. Download the **webviewdp-debug-apk** artifact.
+3. Unzip it and sideload `app-debug.apk` onto the phone.
+
+## Build locally (optional)
 
 1. Open this folder in Android Studio and let Gradle sync.
-2. `Build > Build App Bundle(s) / APK(s) > Build APK(s)`, or run on a
-   connected device.
-3. Install the APK and open it with Tailscale connected.
+2. `Build > Build App Bundle(s) / APK(s) > Build APK(s)`.
 
-## Change the target URL
+## Change or reset the URL
 
-Edit `app/src/main/res/values/strings.xml` and set `target_url` to your
-harness's `https://<machine>.<tailnet>.ts.net/` URL.
+- Clear the app's data (Settings > Apps > WebView DP > Clear data) to show the
+  setup screen again.
+- The app also returns to the setup screen if the saved URL fails to load.
 
 ## Notes
 

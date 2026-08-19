@@ -1,4 +1,9 @@
 <resources>
     <string name="app_name">WebView DP</string>
-    <string name="target_url">https://desktop-92l8gd4.tail5c5c46.ts.net/</string>
+    <string name="setup_title">Connect to your harness</string>
+    <string name="setup_hint">Paste your DeepSeek Harness URL (the Tailscale .ts.net address).</string>
+    <string name="url_hint">https://machine.tailnet.ts.net</string>
+    <string name="connect">Connect</string>
+    <string name="url_empty">Please enter a URL.</string>
+    <string name="load_error">Could not load that address. Check the URL and that Tailscale is connected.</string>
 </resources>

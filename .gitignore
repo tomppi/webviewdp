@@ -11,3 +11,6 @@ local.properties
 
 # GitHub Actions log dumps
 buildlogs*
+
+apk-out
+webviewdp-debug.zip

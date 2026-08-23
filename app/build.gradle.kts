@@ -11,11 +11,23 @@ android {
         applicationId = "com.webviewdp"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 2
+        versionName = "1.1"
+    }
+
+    signingConfigs {
+        create("stable") {
+            storeFile = file("../signing/debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
     }
 
     buildTypes {
+        getByName("debug") {
+            signingConfig = signingConfigs.getByName("stable")
+        }
         release {
             isMinifyEnabled = false
         }
@@ -32,4 +44,5 @@ android {
 }
 
 dependencies {
+    implementation("androidx.core:core:1.13.1")
 }

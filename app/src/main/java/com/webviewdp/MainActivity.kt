@@ -9,6 +9,8 @@ import android.content.Intent
 import android.content.SharedPreferences
 import android.content.pm.PackageManager
 import android.net.Uri
+import androidx.core.content.FileProvider
+import java.io.File
 import android.os.Build
 import android.os.Bundle
 import android.view.View
@@ -197,9 +199,9 @@ class MainActivity : Activity() {
     @Deprecated("Deprecated in Java")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         if (requestCode == FILE_CHOOSER_REQUEST) {
-            filePathCallback?.onReceiveValue(
-                WebChromeClient.FileChooserParams.parseResult(resultCode, data),
-            )
+            val files = WebChromeClient.FileChooserParams.parseResult(resultCode, data)
+            val delivered = files?.mapNotNull { copyToCache(it) }?.toTypedArray()?.takeIf { it.isNotEmpty() }
+            filePathCallback?.onReceiveValue(delivered)
             filePathCallback = null
             fileChooserParams = null
         } else {
@@ -213,6 +215,23 @@ class MainActivity : Activity() {
             webView.goBack()
         } else {
             super.onBackPressed()
+        }
+    }
+
+
+    /** Copy a picked content URI into our own cache and return a FileProvider
+     * URI the WebView can always read - sidesteps every provider grant quirk
+     * on modern Android. Returns null when the source cannot be read. */
+    private fun copyToCache(uri: Uri): Uri? {
+        return try {
+            val dir = File(cacheDir, "attachments").apply { mkdirs() }
+            val target = File(dir, "attach_" + System.currentTimeMillis() + "_" + (dir.listFiles()?.size ?: 0) + ".jpg")
+            contentResolver.openInputStream(uri)?.use { input ->
+                target.outputStream().use { output -> input.copyTo(output) }
+            } ?: return null
+            FileProvider.getUriForFile(this, "$packageName.fileprovider", target)
+        } catch (_: Exception) {
+            null
         }
     }
 

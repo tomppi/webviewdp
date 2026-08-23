@@ -1,11 +1,15 @@
 package com.webviewdp
 
+import android.Manifest
 import android.annotation.SuppressLint
 import android.app.Activity
+import android.content.ClipData
 import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
+import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.view.View
 import android.view.inputmethod.EditorInfo
@@ -27,6 +31,8 @@ class MainActivity : Activity() {
     private lateinit var urlInput: EditText
     private lateinit var prefs: SharedPreferences
     private var filePathCallback: ValueCallback<Array<Uri>>? = null
+    private var fileChooserParams: WebChromeClient.FileChooserParams? = null
+    private var pendingFileChooser = false
 
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -77,13 +83,12 @@ class MainActivity : Activity() {
             ): Boolean {
                 this@MainActivity.filePathCallback?.onReceiveValue(null)
                 this@MainActivity.filePathCallback = filePathCallback
-                val intent = fileChooserParams.createIntent()
-                try {
-                    @Suppress("DEPRECATION")
-                    startActivityForResult(intent, FILE_CHOOSER_REQUEST)
-                } catch (_: Exception) {
-                    this@MainActivity.filePathCallback = null
-                    return false
+                this@MainActivity.fileChooserParams = fileChooserParams
+                if (hasMediaPermission()) {
+                    launchFileChooser()
+                } else {
+                    pendingFileChooser = true
+                    requestMediaPermission()
                 }
                 return true
             }
@@ -105,6 +110,58 @@ class MainActivity : Activity() {
             open(savedUrl)
         } else {
             showSetup()
+        }
+    }
+
+    private fun mediaPermission(): String =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            Manifest.permission.READ_MEDIA_IMAGES
+        } else {
+            Manifest.permission.READ_EXTERNAL_STORAGE
+        }
+
+    private fun hasMediaPermission(): Boolean =
+        checkSelfPermission(mediaPermission()) == PackageManager.PERMISSION_GRANTED
+
+    private fun requestMediaPermission() {
+        requestPermissions(arrayOf(mediaPermission()), MEDIA_PERMISSION_REQUEST)
+    }
+
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray,
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode != MEDIA_PERMISSION_REQUEST) return
+        if (grantResults.firstOrNull() != PackageManager.PERMISSION_GRANTED) {
+            Toast.makeText(this, R.string.permission_photos, Toast.LENGTH_LONG).show()
+        }
+        if (pendingFileChooser) {
+            pendingFileChooser = false
+            launchFileChooser()
+        }
+    }
+
+    private fun launchFileChooser() {
+        val params = fileChooserParams ?: return
+        val intent = params.createIntent()
+        intent.addFlags(
+            Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION,
+        )
+        if (
+            params.mode == FileChooserParams.MODE_OPEN_MULTIPLE ||
+            params.mode == FileChooserParams.MODE_OPEN_MULTIPLE_WITH_PREVIEW
+        ) {
+            intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
+            intent.data?.let { intent.clipData = ClipData.newRawUri("images", it) }
+        }
+        try {
+            @Suppress("DEPRECATION")
+            startActivityForResult(intent, FILE_CHOOSER_REQUEST)
+        } catch (_: Exception) {
+            filePathCallback = null
+            fileChooserParams = null
         }
     }
 
@@ -145,6 +202,7 @@ class MainActivity : Activity() {
                 WebChromeClient.FileChooserParams.parseResult(resultCode, data),
             )
             filePathCallback = null
+            fileChooserParams = null
         } else {
             super.onActivityResult(requestCode, resultCode, data)
         }
@@ -173,5 +231,6 @@ class MainActivity : Activity() {
         private const val PREFS_NAME = "webviewdp"
         private const val KEY_URL = "url"
         private const val FILE_CHOOSER_REQUEST = 1001
+        private const val MEDIA_PERMISSION_REQUEST = 1002
     }
 }

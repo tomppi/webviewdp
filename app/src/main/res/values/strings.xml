@@ -6,4 +6,5 @@
     <string name="connect">Connect</string>
     <string name="url_empty">Please enter a URL.</string>
     <string name="load_error">Could not load that address. Check the URL and that Tailscale is connected.</string>
+    <string name="permission_photos">Photo access is needed to attach images. Allow it in Settings to attach from gallery.</string>
 </resources>

@@ -8,6 +8,8 @@ import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.net.Uri
 import androidx.core.content.FileProvider
 import java.io.File
@@ -222,13 +224,40 @@ class MainActivity : Activity() {
     /** Copy a picked content URI into our own cache and return a FileProvider
      * URI the WebView can always read - sidesteps every provider grant quirk
      * on modern Android. Returns null when the source cannot be read. */
+    /** Pick an extension + copy strategy for the received MIME: standard
+     * formats are copied byte-for-byte with their real extension (so the page
+     * sees image/png etc.), anything else (HEIC, empty type, provider quirks)
+     * is decoded by the platform and re-encoded as JPEG - the WebView then
+     * hands the page a normal, fully readable image. */
     private fun copyToCache(uri: Uri): Uri? {
         return try {
+            val mime = contentResolver.getType(uri) ?: ""
+            val standard = mime == "image/png" || mime == "image/webp" ||
+                mime == "image/gif" || mime == "image/jpeg" || mime == "image/jpg"
+            val ext = when (mime) {
+                "image/png" -> "png"
+                "image/webp" -> "webp"
+                "image/gif" -> "gif"
+                "image/jpeg", "image/jpg" -> "jpg"
+                else -> "jpg"
+            }
             val dir = File(cacheDir, "attachments").apply { mkdirs() }
-            val target = File(dir, "attach_" + System.currentTimeMillis() + "_" + (dir.listFiles()?.size ?: 0) + ".jpg")
-            contentResolver.openInputStream(uri)?.use { input ->
-                target.outputStream().use { output -> input.copyTo(output) }
-            } ?: return null
+            val target = File(dir, "attach_" + System.currentTimeMillis() + "_" + (dir.listFiles()?.size ?: 0) + "." + ext)
+            if (standard) {
+                contentResolver.openInputStream(uri)?.use { input ->
+                    target.outputStream().use { output -> input.copyTo(output) }
+                } ?: return null
+            } else {
+                val bitmap = contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it) } ?: return null
+                var out = bitmap
+                val maxDim = 4096
+                if (bitmap.width > maxDim || bitmap.height > maxDim) {
+                    val scale = maxDim.toFloat() / maxOf(bitmap.width, bitmap.height)
+                    out = Bitmap.createScaledBitmap(bitmap, (bitmap.width * scale).toInt(), (bitmap.height * scale).toInt(), true)
+                }
+                target.outputStream().use { out.compress(Bitmap.CompressFormat.JPEG, 90, it) }
+                if (out !== bitmap) out.recycle()
+            }
             FileProvider.getUriForFile(this, "$packageName.fileprovider", target)
         } catch (_: Exception) {
             null

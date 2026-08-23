@@ -149,10 +149,9 @@ class MainActivity : Activity() {
         intent.addFlags(
             Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION,
         )
-        if (
-            params.mode == WebChromeClient.FileChooserParams.MODE_OPEN_MULTIPLE ||
-            params.mode == WebChromeClient.FileChooserParams.MODE_OPEN_MULTIPLE_WITH_PREVIEW
-        ) {
+        // MODE_OPEN_MULTIPLE_WITH_PREVIEW (API 29) is not on every
+        // compile target; >= MODE_OPEN_MULTIPLE covers both multiple modes.
+        if (params.mode >= WebChromeClient.FileChooserParams.MODE_OPEN_MULTIPLE) {
             intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
             intent.data?.let { intent.clipData = ClipData.newRawUri("images", it) }
         }

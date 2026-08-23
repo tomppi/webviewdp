@@ -150,8 +150,8 @@ class MainActivity : Activity() {
             Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION,
         )
         if (
-            params.mode == FileChooserParams.MODE_OPEN_MULTIPLE ||
-            params.mode == FileChooserParams.MODE_OPEN_MULTIPLE_WITH_PREVIEW
+            params.mode == WebChromeClient.FileChooserParams.MODE_OPEN_MULTIPLE ||
+            params.mode == WebChromeClient.FileChooserParams.MODE_OPEN_MULTIPLE_WITH_PREVIEW
         ) {
             intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
             intent.data?.let { intent.clipData = ClipData.newRawUri("images", it) }

@@ -8,3 +8,6 @@
 .externalNativeBuild/
 .cxx/
 local.properties
+
+# GitHub Actions log dumps
+buildlogs*

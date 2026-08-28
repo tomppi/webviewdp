@@ -34,6 +34,22 @@ GitHub Actions builds a debug APK on every push to `main` (and on manual
   setup screen again.
 - The app also returns to the setup screen if the saved URL fails to load.
 
+## Authentication (harness 0.1.2-alpha.1 and newer)
+
+The harness's browser session gate answers the page with 401 until the browser
+exchanges the server's per-launch token. This app handles that automatically:
+
+1. The harness server writes `auth.json` (the per-launch ?token= URLs for the
+   tailnet and loopback authorities) into its served dist every start - the
+   server's own launcher script (`dsh-launch.ps1`) does this.
+2. On a 401 the app fetches `<origin>/auth.json` (a public static asset), loads
+   the matching `?token=` URL, and the 303 redirect back to `/` stores the
+   30-day signed cookie. From then on the app needs nothing - including across
+   harness restarts.
+
+If the harness was started without `dsh-launch.ps1` (so `auth.json` is missing),
+the app shows the setup screen with a message instead of a confusing 401 page.
+
 ## Notes
 
 - Keeps all navigation inside the WebView and supports file uploads.

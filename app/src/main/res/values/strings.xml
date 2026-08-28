@@ -7,4 +7,5 @@
     <string name="url_empty">Please enter a URL.</string>
     <string name="load_error">Could not load that address. Check the URL and that Tailscale is connected.</string>
     <string name="permission_photos">Photo access is needed to attach images. Allow it in Settings to attach from gallery.</string>
+    <string name="auth_error">Could not authenticate with the harness. Make sure the server was started with dsh-launch.ps1, then try again.</string>
 </resources>

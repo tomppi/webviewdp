@@ -21,12 +21,16 @@ import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.Button
 import android.widget.EditText
 import android.widget.Toast
+import org.json.JSONObject
+import java.net.HttpURLConnection
+import java.net.URL
 
 class MainActivity : Activity() {
 
@@ -37,6 +41,7 @@ class MainActivity : Activity() {
     private var filePathCallback: ValueCallback<Array<Uri>>? = null
     private var fileChooserParams: WebChromeClient.FileChooserParams? = null
     private var pendingFileChooser = false
+    private var authAttempts = 0
 
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -75,6 +80,16 @@ class MainActivity : Activity() {
                 if (request.isForMainFrame) {
                     showSetup()
                     Toast.makeText(this@MainActivity, R.string.load_error, Toast.LENGTH_LONG).show()
+                }
+            }
+
+            override fun onReceivedHttpError(
+                view: WebView,
+                request: WebResourceRequest,
+                errorResponse: WebResourceResponse,
+            ) {
+                if (request.isForMainFrame && errorResponse.statusCode == 401) {
+                    tryAuthorize(request.url.toString())
                 }
             }
         }
@@ -181,7 +196,84 @@ class MainActivity : Activity() {
     private fun open(url: String) {
         setupView.visibility = View.GONE
         webView.visibility = View.VISIBLE
+        authAttempts = 0
         webView.loadUrl(url)
+    }
+
+    /**
+     * The harness answered 401 for the main frame: fetch this origin's
+     * auth.json (public, no cookie needed), load the named ?token= URL, and the
+     * 303 redirect back to / carries the signed cookie. Two attempts cover a
+     * server restart between the fetch and the load.
+     */
+    private fun tryAuthorize(pageUrl: String) {
+        if (authAttempts >= MAX_AUTH_ATTEMPTS) {
+            showSetup()
+            Toast.makeText(this, R.string.auth_error, Toast.LENGTH_LONG).show()
+            return
+        }
+        authAttempts += 1
+        Thread {
+            val tokenUrl = fetchTokenUrl(pageUrl)
+            runOnUiThread {
+                if (tokenUrl != null) {
+                    webView.loadUrl(tokenUrl)
+                } else {
+                    showSetup()
+                    Toast.makeText(this@MainActivity, R.string.auth_error, Toast.LENGTH_LONG).show()
+                }
+            }
+        }.start()
+    }
+
+    /**
+     * Resolve the authenticated URL for this page's origin from auth.json.
+     * @return the ?token= URL, or null when unavailable.
+     */
+    private fun fetchTokenUrl(pageUrl: String): String? {
+        val origin = originOf(pageUrl) ?: return null
+        var connection: HttpURLConnection? = null
+        return try {
+            connection = URL("$origin/auth.json").openConnection() as HttpURLConnection
+            connection.connectTimeout = 10_000
+            connection.readTimeout = 10_000
+            if (connection.responseCode != HTTP_OK) return null
+            val body = connection.inputStream.bufferedReader().use { it.readText() }
+            val urls = JSONObject(body).optJSONObject("urls") ?: return null
+            val explicit = urls.optString(origin, null)
+            if (!explicit.isNullOrEmpty()) return explicit
+            matchByAuthority(urls, pageUrl)
+        } catch (_: Exception) {
+            null
+        } finally {
+            connection?.disconnect()
+        }
+    }
+
+    /** Exact origin of a URL: scheme://host[:non-default-port]. */
+    private fun originOf(url: String): String? {
+        return try {
+            val uri = Uri.parse(url)
+            val scheme = uri.scheme ?: return null
+            val host = uri.host ?: return null
+            val defaultPort = if (scheme == "https") 443 else 80
+            val port = uri.port
+            if (port >= 0 && port != defaultPort) "$scheme://$host:$port" else "$scheme://$host"
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    /** Fallback for keys that differ only in default-port spelling. */
+    private fun matchByAuthority(urls: JSONObject, pageUrl: String): String? {
+        val pageOrigin = originOf(pageUrl) ?: return null
+        val pageAuthority = Uri.parse(pageOrigin).authority ?: return null
+        val keys = urls.keys()
+        while (keys.hasNext()) {
+            val key = keys.next()
+            if (Uri.parse(key).authority == pageAuthority) return urls.optString(key, null)
+        }
+        return null
     }
 
     private fun showSetup() {
@@ -279,5 +371,7 @@ class MainActivity : Activity() {
         private const val KEY_URL = "url"
         private const val FILE_CHOOSER_REQUEST = 1001
         private const val MEDIA_PERMISSION_REQUEST = 1002
+        private const val HTTP_OK = 200
+        private const val MAX_AUTH_ATTEMPTS = 2
     }
 }

@@ -15,8 +15,11 @@ import androidx.core.content.FileProvider
 import java.io.File
 import android.os.Build
 import android.os.Bundle
+import android.os.SystemClock
+import android.util.Log
 import android.view.View
 import android.view.inputmethod.EditorInfo
+import android.webkit.RenderProcessGoneDetail
 import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
@@ -42,6 +45,9 @@ class MainActivity : Activity() {
     private var fileChooserParams: WebChromeClient.FileChooserParams? = null
     private var pendingFileChooser = false
     private var authAttempts = 0
+    private var lastMainUrl: String? = null
+    private var rendererGoneCount = 0
+    private var lastRendererGoneAt = 0L
 
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -72,12 +78,18 @@ class MainActivity : Activity() {
                 return true
             }
 
+            override fun onPageStarted(view: WebView, url: String, favicon: Bitmap?) {
+                lastMainUrl = url
+                Log.d(TAG, "page started: $url")
+            }
+
             override fun onReceivedError(
                 view: WebView,
                 request: WebResourceRequest,
                 error: WebResourceError,
             ) {
                 if (request.isForMainFrame) {
+                    Log.w(TAG, "main frame error: ${error.errorCode} ${error.description} for ${request.url}")
                     showSetup()
                     Toast.makeText(this@MainActivity, R.string.load_error, Toast.LENGTH_LONG).show()
                 }
@@ -89,8 +101,46 @@ class MainActivity : Activity() {
                 errorResponse: WebResourceResponse,
             ) {
                 if (request.isForMainFrame && errorResponse.statusCode == 401) {
+                    Log.d(TAG, "main frame 401 for ${request.url}")
                     tryAuthorize(request.url.toString())
                 }
+            }
+
+            /**
+             * Android may kill the WebView's renderer process while the app
+             * sits in the background (memory pressure; heavier pages make this
+             * far more likely). The default behaviour then removes the WebView
+             * from the view tree, leaving a permanently blank screen. Take
+             * over: log the cause, and reload the last page so a fresh
+             * renderer is spawned. Give up to the setup screen after repeated
+             * rapid restarts instead of looping.
+             */
+            override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
+                Log.w(TAG, "renderer gone: didCrash=${detail.didCrash()}")
+                val now = SystemClock.elapsedRealtime()
+                rendererGoneCount =
+                    if (now - lastRendererGoneAt > RENDERER_RESTART_WINDOW_MS) 1 else rendererGoneCount + 1
+                lastRendererGoneAt = now
+                if (rendererGoneCount > MAX_RENDERER_RESTARTS) {
+                    Log.e(TAG, "renderer keeps dying ($rendererGoneCount restarts); returning to setup")
+                    runOnUiThread {
+                        showSetup()
+                        Toast.makeText(this@MainActivity, R.string.renderer_error, Toast.LENGTH_LONG).show()
+                    }
+                    return true
+                }
+                runOnUiThread {
+                    val target = lastMainUrl ?: prefs.getString(KEY_URL, null)
+                    if (target != null) {
+                        Log.i(TAG, "renderer gone: reloading $target")
+                        authAttempts = 0
+                        view.loadUrl(target)
+                    } else {
+                        Log.w(TAG, "renderer gone: nothing to reload; returning to setup")
+                        showSetup()
+                    }
+                }
+                return true
             }
         }
 
@@ -126,10 +176,38 @@ class MainActivity : Activity() {
         val savedUrl = prefs.getString(KEY_URL, null)
         if (savedUrl != null) {
             urlInput.setText(savedUrl)
-            open(savedUrl)
+            val restored = savedInstanceState?.let { webView.restoreState(it) }
+            if (restored != null) {
+                Log.d(TAG, "restored webview state")
+                setupView.visibility = View.GONE
+                webView.visibility = View.VISIBLE
+                authAttempts = 0
+            } else {
+                open(savedUrl)
+            }
         } else {
             showSetup()
         }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        webView.onResume()
+        // Renderer death while backgrounded can otherwise leave a blank view;
+        // onRenderProcessGone reloads it, but cover the no-URL case too.
+        if (webView.visibility == View.VISIBLE && webView.url.isNullOrBlank()) {
+            val target = lastMainUrl ?: prefs.getString(KEY_URL, null)
+            if (target != null) {
+                Log.i(TAG, "resumed with no URL; reloading $target")
+                rendererGoneCount = 0
+                open(target)
+            }
+        }
+    }
+
+    override fun onPause() {
+        webView.onPause()
+        super.onPause()
     }
 
     private fun mediaPermission(): String =
@@ -197,6 +275,7 @@ class MainActivity : Activity() {
         setupView.visibility = View.GONE
         webView.visibility = View.VISIBLE
         authAttempts = 0
+        rendererGoneCount = 0
         webView.loadUrl(url)
     }
 
@@ -208,17 +287,21 @@ class MainActivity : Activity() {
      */
     private fun tryAuthorize(pageUrl: String) {
         if (authAttempts >= MAX_AUTH_ATTEMPTS) {
+            Log.w(TAG, "auth attempts exhausted; returning to setup")
             showSetup()
             Toast.makeText(this, R.string.auth_error, Toast.LENGTH_LONG).show()
             return
         }
         authAttempts += 1
+        Log.d(TAG, "authorizing against $pageUrl (attempt $authAttempts)")
         Thread {
             val tokenUrl = fetchTokenUrl(pageUrl)
             runOnUiThread {
                 if (tokenUrl != null) {
+                    Log.d(TAG, "token url resolved; loading it (redacted token)")
                     webView.loadUrl(tokenUrl)
                 } else {
+                    Log.w(TAG, "no token url in auth.json for $pageUrl")
                     showSetup()
                     Toast.makeText(this@MainActivity, R.string.auth_error, Toast.LENGTH_LONG).show()
                 }
@@ -243,7 +326,8 @@ class MainActivity : Activity() {
             val explicit = urls.optString(origin, null)
             if (!explicit.isNullOrEmpty()) return explicit
             matchByAuthority(urls, pageUrl)
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            Log.w(TAG, "auth.json fetch failed for $origin: ${e.message}")
             null
         } finally {
             connection?.disconnect()
@@ -367,11 +451,14 @@ class MainActivity : Activity() {
     }
 
     companion object {
+        private const val TAG = "WebViewDP"
         private const val PREFS_NAME = "webviewdp"
         private const val KEY_URL = "url"
         private const val FILE_CHOOSER_REQUEST = 1001
         private const val MEDIA_PERMISSION_REQUEST = 1002
         private const val HTTP_OK = 200
         private const val MAX_AUTH_ATTEMPTS = 2
+        private const val MAX_RENDERER_RESTARTS = 3
+        private const val RENDERER_RESTART_WINDOW_MS = 60_000L
     }
 }

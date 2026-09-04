@@ -55,3 +55,9 @@ the app shows the setup screen with a message instead of a confusing 401 page.
 - Keeps all navigation inside the WebView and supports file uploads.
 - No dependencies or analytics; it is a plain `WebView` with JavaScript and
   DOM storage enabled.
+- **Background recovery:** Android can reclaim the WebView's renderer process
+  while the app is in the background (memory pressure; heavier harness pages
+  make this likely). The app notices via `onRenderProcessGone` and reloads the
+  current page automatically instead of leaving a blank screen; after repeated
+  rapid failures it returns to the setup screen. Logcat (tag `WebViewDP`)
+  records every reload and its cause.

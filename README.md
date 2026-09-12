@@ -61,3 +61,7 @@ the app shows the setup screen with a message instead of a confusing 401 page.
   current page automatically instead of leaving a blank screen; after repeated
   rapid failures it returns to the setup screen. Logcat (tag `WebViewDP`)
   records every reload and its cause.
+
+## License
+
+MIT - see [`LICENSE`](LICENSE).

@@ -39,9 +39,12 @@ GitHub Actions builds a debug APK on every push to `main` (and on manual
 The harness's browser session gate answers the page with 401 until the browser
 exchanges the server's per-launch token. This app handles that automatically:
 
-1. The harness server writes `auth.json` (the per-launch ?token= URLs for the
-   tailnet and loopback authorities) into its served dist every start - the
-   server's own launcher script (`dsh-launch.ps1`) does this.
+1. Something publishes `auth.json` - the per-launch `?token=` URLs for the
+   tailnet and loopback authorities - into the harness's served dist, once per
+   start. **The harness does not do this itself:** it mints a token, prints a
+   `?token=` URL, and serves its dist as static files. [`dsh-launch.ps1`](dsh-launch.ps1)
+   in this repository is the bridge, wrapping the server start and catching the
+   token it prints.
 2. On a 401 the app fetches `<origin>/auth.json` (a public static asset), loads
    the matching `?token=` URL, and the 303 redirect back to `/` stores the
    30-day signed cookie. From then on the app needs nothing - including across
@@ -49,6 +52,29 @@ exchanges the server's per-launch token. This app handles that automatically:
 
 If the harness was started without `dsh-launch.ps1` (so `auth.json` is missing),
 the app shows the setup screen with a message instead of a confusing 401 page.
+
+## Running the harness
+
+The harness itself is [deepseek-ai/deepseek-harness](https://github.com/deepseek-ai/deepseek-harness).
+Build a checkout, then start it through the launcher so the token gets
+published:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File dsh-launch.ps1 `
+    -TailHost machine.tailnet-name.ts.net -Repo C:\src\deepseek-harness
+```
+
+- `-TailHost` is the authority clients reach the harness by, and also becomes
+  the server's `--trusted-host`. Use the tailnet name so TLS and MagicDNS line
+  up; a bare address works for a local test.
+- `-Repo` is a built checkout (`apps/cli/lib/bin.js` must exist). `node` is
+  taken from `PATH`.
+- It refuses to start a second server on a port that is already serving, and
+  waits up to ten minutes for the token before giving up with the log tail.
+- `auth.json` lands in `<Repo>\apps\web\dist`; override with `-DistRoot` and
+  `-Port` for a throwaway instance.
+- It stays alive alongside the server, which is what makes it usable as a
+  scheduled task.
 
 ## Notes
 

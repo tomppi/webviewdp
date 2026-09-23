@@ -15,3 +15,9 @@ buildlogs*
 
 apk-out
 webviewdp-debug.zip
+
+# Release signing: the key is private and keystore.properties carries its
+# passwords. Neither is ever committed - see signing/README.md.
+keystore.properties
+*.jks
+*.keystore

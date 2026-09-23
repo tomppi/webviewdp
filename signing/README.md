@@ -1,29 +1,40 @@
 # signing
 
-`debug.keystore` is the Android debug key **both build types are signed with**,
-committed on purpose. It is not a secret: the password and alias are the standard
-debug ones (`android` / `androiddebugkey`).
+`release.jks` is the **private** key the published APK is signed with. It is not
+in this repository, and neither is `keystore.properties`, which carries its
+passwords. Both are gitignored.
 
-The published APK is the **release** variant - `android:debuggable` off, so no
-`adb run-as`, no heap dumps and no debug-only certificate trust - signed with this
-key so an install keeps its identity across upgrades.
+Locally, signing reads `keystore.properties`:
 
-**What that means.** Anyone with this repository has the key, so anyone can sign a
-modified APK that Android installs as an update over the published one and keeps
-its data. Trust a build for where it came from, not for the fact that it installs.
-Closing that would mean a private release key: one uninstall - and its data - on
-every existing install, because Android refuses an update signed by a different
-key.
+    storeFile=signing/release.jks
+    storePassword=<password>
+    keyAlias=webviewdp
+    keyPassword=<password>
 
-The key is here because a sideload build has to keep **one** identity. Left to
-itself, every CI run generates a throwaway debug key of its own, so each build
-would have been a dead end for the last one.
+CI reads the same four values from repository secrets - `KEYSTORE_BASE64`,
+`KEYSTORE_PASSWORD`, `KEY_ALIAS`, `KEY_PASSWORD` - and decodes the keystore to
+`signing/release.jks` before the build. A release build without a usable key stops
+rather than producing an unsigned APK. The debug build type uses the SDK's own
+throwaway `~/.android/debug.keystore`: a debug APK is a local artifact, so its
+identity only has to outlive the machine that built it.
+
+**Back the key up, with its passwords, off this machine.** Losing it means no
+future build can install over the ones it signed - Android refuses an update
+signed by a different key (`INSTALL_FAILED_UPDATE_INCOMPATIBLE`) and the only way
+past that uninstalls the app, taking its data with it.
 
 Certificate SHA-256:
-`BF:50:95:37:AB:DE:00:BD:22:B8:FE:F7:9C:D4:4B:FE:CD:A6:77:0D:65:3F:38:03:0F:47:9F:63:A1:A3:48:76`
+`B6:51:D1:93:11:01:F5:7B:85:5C:D1:19:0B:5B:7E:14:0D:16:BD:A7:69:11:0D:15:00:06:C7:E3:1E:CF:BC:55`
 
 Verify a downloaded APK against it (`apksigner` is in the Android SDK's
 build-tools; the APK carries a v2 signature, so `keytool -printcert -jarfile`
 cannot read it):
 
     apksigner verify --print-certs app-release.apk
+
+## The key this replaced
+
+Every build up to and including 1.4 was signed with a debug key committed here, so
+its certificate is **public**: anyone who cloned the repository has it and can sign
+an APK Android installs as an update over 1.4, keeping its data. An install signed
+with it has to be uninstalled once before a `release.jks` build will install.

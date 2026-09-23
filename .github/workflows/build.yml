@@ -17,6 +17,29 @@ jobs:
           distribution: temurin
           java-version: '17'
 
+      # The release key is private, so it is not in the checkout: the build takes it
+      # from the repository secrets and writes the same keystore.properties a local
+      # build reads.
+      - name: Materialise the release keystore
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          umask 077
+          test -n "${KEYSTORE_BASE64:-}" || { echo "::error::KEYSTORE_BASE64 secret is not set" >&2; exit 1; }
+          mkdir -p signing
+          printf '%s' "$KEYSTORE_BASE64" | base64 -d > signing/release.jks
+          cat > keystore.properties <<PROPS
+          storeFile=signing/release.jks
+          storePassword=$KEYSTORE_PASSWORD
+          keyAlias=$KEY_ALIAS
+          keyPassword=$KEY_PASSWORD
+          PROPS
+          chmod 600 signing/release.jks keystore.properties
+
       - name: Build release APK
         run: chmod +x gradlew && ./gradlew assembleRelease --no-daemon
 
@@ -35,7 +58,15 @@ jobs:
             exit 1
           fi
           grep -q "package: name='com.webviewdp'" badging.log
-          "$BUILD_TOOLS/apksigner" verify --print-certs "$APK"
+          "$BUILD_TOOLS/apksigner" verify --print-certs "$APK" | tee apk-signer.log
+          # The signing identity is pinned: the release key is private, and this is
+          # the only place that can notice a build falling back to another key.
+          if grep -q 'CN=Android Debug' apk-signer.log; then
+            echo "::error::the release APK is signed with an Android debug key" >&2
+            exit 1
+          fi
+          grep -q 'b651d1931101f57b855cd1190b5b7e140d16bda769110d150006c7e31ecfbc55' apk-signer.log \
+            || { echo "::error::the release APK is not signed with the release key" >&2; exit 1; }
 
       - name: Upload APK
         uses: actions/upload-artifact@v4

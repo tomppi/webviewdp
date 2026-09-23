@@ -1,12 +1,12 @@
 <resources>
     <string name="app_name">WebView DP</string>
     <string name="setup_title">Connect to your harness</string>
-    <string name="setup_hint">Paste your DeepSeek Harness URL (the Tailscale .ts.net address).</string>
-    <string name="url_hint">https://machine.tailnet.ts.net</string>
+    <string name="setup_hint">Paste the launch URL dsh-launch printed — the Tailscale .ts.net address ending in ?token=… The session it signs in lasts 30 days.</string>
+    <string name="url_hint">https://machine.tailnet.ts.net/?token=…</string>
     <string name="connect">Connect</string>
     <string name="url_empty">Please enter a URL.</string>
     <string name="load_error">Could not load that address. Check the URL and that Tailscale is connected.</string>
     <string name="permission_photos">Photo access is needed to attach images. Allow it in Settings to attach from gallery.</string>
-    <string name="auth_error">Could not authenticate with the harness. Make sure the server was started with dsh-launch.ps1, then try again.</string>
+    <string name="auth_error">The harness wants a sign-in. Copy the ?token=… launch URL printed by dsh-launch (or dsh-launch.ps1) and paste it above; it is the only copy, by design.</string>
     <string name="renderer_error">The web content keeps failing to start (likely low memory). It will reload on the next attempt — check the harness is still running.</string>
 </resources>

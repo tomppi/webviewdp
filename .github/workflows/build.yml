@@ -17,11 +17,28 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Build debug APK
-        run: chmod +x gradlew && ./gradlew assembleDebug --no-daemon
+      - name: Build release APK
+        run: chmod +x gradlew && ./gradlew assembleRelease --no-daemon
+
+      # The published APK must not be debuggable: `adb run-as`, heap dumps and
+      # the WebView's remote-debugging hook all come with that flag, and the
+      # signature has to be there or nothing installs it. apksigner fails on an
+      # unsigned or tampered APK.
+      - name: Check the release APK
+        run: |
+          APK=app/build/outputs/apk/release/app-release.apk
+          BUILD_TOOLS=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -n 1)
+          "$BUILD_TOOLS/aapt2" dump badging "$APK" > badging.log
+          cat badging.log
+          if grep -q 'application-debuggable' badging.log; then
+            echo "::error::the release APK is debuggable" >&2
+            exit 1
+          fi
+          grep -q "package: name='com.webviewdp'" badging.log
+          "$BUILD_TOOLS/apksigner" verify --print-certs "$APK"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: webviewdp-debug-apk
-          path: app/build/outputs/apk/debug/app-debug.apk
+          name: webviewdp-apk
+          path: app/build/outputs/apk/release/app-release.apk

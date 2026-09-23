@@ -1,16 +1,20 @@
-# dsh-launch.ps1 - start the dsh web server (built repo) and publish the
-# launch-token URLs into the served dist as auth.json, so webviewdp (the
-# Android app) and browsers authenticate by loading the printed ?token= URL -
-# exactly once the server mints a 30-day cookie for whatever authority it saw.
+# dsh-launch.ps1 - start the dsh web server (built repo) and print the
+# launch-token URLs, so a client holding one authenticates by loading it once -
+# the server then mints a 30-day cookie for whatever authority it saw.
 #
-# The harness does not write auth.json itself. It mints a launch token, prints
-# a ?token= URL, and serves its dist directory as static files; this script is
-# the bridge between those two facts. Without it clients get a 401, and the app
-# shows its setup screen instead of the UI.
+# The harness prints a ?token= URL and serves its dist directory as static
+# files; this script catches that URL and says where to paste it. It does NOT
+# publish it: every file in the served dist is public, so an auth.json there is
+# a working login - for a harness that can run code on this machine - readable
+# by anything that can reach the port. Clients that accept the ?token= URL
+# (enderslicercura after 1.3.5, WebView DP after 1.4) need nothing published.
 #
 # Usage:
 #   powershell -ExecutionPolicy Bypass -File dsh-launch.ps1 `
 #       -TailHost machine.tailnet-name.ts.net -Repo C:\src\deepseek-harness
+#
+#   -PublishAuthJson writes <dist>\auth.json anyway, for a client that still
+#   authenticates by reading it. Use it only while such a client is in use.
 #
 #   powershell -ExecutionPolicy Bypass -File dsh-launch.ps1 `
 #       -TailHost 127.0.0.1 -Port 3082 -DistRoot C:\tmp\dist   # test
@@ -26,7 +30,11 @@ param(
     [int]$Port = 3080,
 
     # Served static directory. Defaults to <Repo>\apps\web\dist.
-    [string]$DistRoot
+    [string]$DistRoot,
+
+    # Publish the launch-token URLs into the served dist as auth.json. Off by
+    # default: that file is a public login for this machine's harness.
+    [switch]$PublishAuthJson
 )
 
 $ErrorActionPreference = "Stop"
@@ -72,24 +80,28 @@ $loopUrl   = "http://127.0.0.1:$Port/?token=$token"
 $directUrl = "http://${TailHost}:$Port/?token=$token"
 $serveUrl  = "https://$TailHost/?token=$token"
 
-# publish into the served dist (non-index assets are public)
-$auth = [ordered]@{
-    version  = 1
-    issuedAt = (Get-Date).ToUniversalTime().ToString("o")
-    urls     = [ordered]@{
-        ("https://" + $TailHost)              = $serveUrl
-        ("http://" + $TailHost + ":" + $Port) = $directUrl
-        ("http://127.0.0.1:" + $Port)         = $loopUrl
-    }
-} | ConvertTo-Json -Depth 5
-$authPath = Join-Path $DistRoot "auth.json"
-Set-Content -Path $authPath -Value $auth -Encoding ascii
+if ($PublishAuthJson) {
+    # Non-index assets are public: this is a login for anyone who can reach the
+    # port, kept only for clients that cannot take the URL directly.
+    $auth = [ordered]@{
+        version  = 1
+        issuedAt = (Get-Date).ToUniversalTime().ToString("o")
+        urls     = [ordered]@{
+            ("https://" + $TailHost)              = $serveUrl
+            ("http://" + $TailHost + ":" + $Port) = $directUrl
+            ("http://127.0.0.1:" + $Port)         = $loopUrl
+        }
+    } | ConvertTo-Json -Depth 5
+    $authPath = Join-Path $DistRoot "auth.json"
+    Set-Content -Path $authPath -Value $auth -Encoding ascii
+    Write-Host "auth.json -> $authPath"
+    Write-Host "  (public: anyone who can reach port $Port can sign in with it)"
+}
 
-Write-Host "dsh web is up; launch token published:"
+Write-Host "dsh web is up. Paste one of these into the client:"
 Write-Host "  serve  :  $serveUrl"
 Write-Host "  direct :  $directUrl"
 Write-Host "  loop   :  $loopUrl"
-Write-Host "auth.json -> $authPath"
 
 # keep the action alive while the server runs (scheduled-task parity)
 while (-not $proc.HasExited) { Start-Sleep -Seconds 10 }

@@ -31,9 +31,6 @@ import android.webkit.WebViewClient
 import android.widget.Button
 import android.widget.EditText
 import android.widget.Toast
-import org.json.JSONObject
-import java.net.HttpURLConnection
-import java.net.URL
 
 class MainActivity : Activity() {
 
@@ -44,7 +41,6 @@ class MainActivity : Activity() {
     private var filePathCallback: ValueCallback<Array<Uri>>? = null
     private var fileChooserParams: WebChromeClient.FileChooserParams? = null
     private var pendingFileChooser = false
-    private var authAttempts = 0
     private var lastMainUrl: String? = null
     private var rendererGoneCount = 0
     private var lastRendererGoneAt = 0L
@@ -133,7 +129,6 @@ class MainActivity : Activity() {
                     val target = lastMainUrl ?: prefs.getString(KEY_URL, null)
                     if (target != null) {
                         Log.i(TAG, "renderer gone: reloading $target")
-                        authAttempts = 0
                         view.loadUrl(target)
                     } else {
                         Log.w(TAG, "renderer gone: nothing to reload; returning to setup")
@@ -181,7 +176,6 @@ class MainActivity : Activity() {
                 Log.d(TAG, "restored webview state")
                 setupView.visibility = View.GONE
                 webView.visibility = View.VISIBLE
-                authAttempts = 0
             } else {
                 open(savedUrl)
             }
@@ -274,90 +268,24 @@ class MainActivity : Activity() {
     private fun open(url: String) {
         setupView.visibility = View.GONE
         webView.visibility = View.VISIBLE
-        authAttempts = 0
         rendererGoneCount = 0
         webView.loadUrl(url)
     }
 
     /**
-     * The harness answered 401 for the main frame: fetch this origin's
-     * auth.json (public, no cookie needed), load the named ?token= URL, and the
-     * 303 redirect back to / carries the signed cookie. Two attempts cover a
-     * server restart between the fetch and the load.
+     * The harness answered 401 for the main frame: this WebView holds no valid
+     * session, and nothing on the server can hand it one.
+     *
+     * It used to read the launch URL from `auth.json` in the served dist. Every
+     * static asset is public, so that file signed in anyone who could reach the
+     * port; the launcher no longer writes it, and this app no longer reads it.
+     * The launch URL is the user's to paste, and the 30-day cookie it mints
+     * keeps them signed in afterwards.
      */
     private fun tryAuthorize(pageUrl: String) {
-        if (authAttempts >= MAX_AUTH_ATTEMPTS) {
-            Log.w(TAG, "auth attempts exhausted; returning to setup")
-            showSetup()
-            Toast.makeText(this, R.string.auth_error, Toast.LENGTH_LONG).show()
-            return
-        }
-        authAttempts += 1
-        Log.d(TAG, "authorizing against $pageUrl (attempt $authAttempts)")
-        Thread {
-            val tokenUrl = fetchTokenUrl(pageUrl)
-            runOnUiThread {
-                if (tokenUrl != null) {
-                    Log.d(TAG, "token url resolved; loading it (redacted token)")
-                    webView.loadUrl(tokenUrl)
-                } else {
-                    Log.w(TAG, "no token url in auth.json for $pageUrl")
-                    showSetup()
-                    Toast.makeText(this@MainActivity, R.string.auth_error, Toast.LENGTH_LONG).show()
-                }
-            }
-        }.start()
-    }
-
-    /**
-     * Resolve the authenticated URL for this page's origin from auth.json.
-     * @return the ?token= URL, or null when unavailable.
-     */
-    private fun fetchTokenUrl(pageUrl: String): String? {
-        val origin = originOf(pageUrl) ?: return null
-        var connection: HttpURLConnection? = null
-        return try {
-            connection = URL("$origin/auth.json").openConnection() as HttpURLConnection
-            connection.connectTimeout = 10_000
-            connection.readTimeout = 10_000
-            if (connection.responseCode != HTTP_OK) return null
-            val body = connection.inputStream.bufferedReader().use { it.readText() }
-            val urls = JSONObject(body).optJSONObject("urls") ?: return null
-            val explicit = urls.optString(origin, null)
-            if (!explicit.isNullOrEmpty()) return explicit
-            matchByAuthority(urls, pageUrl)
-        } catch (e: Exception) {
-            Log.w(TAG, "auth.json fetch failed for $origin: ${e.message}")
-            null
-        } finally {
-            connection?.disconnect()
-        }
-    }
-
-    /** Exact origin of a URL: scheme://host[:non-default-port]. */
-    private fun originOf(url: String): String? {
-        return try {
-            val uri = Uri.parse(url)
-            val scheme = uri.scheme ?: return null
-            val host = uri.host ?: return null
-            val defaultPort = if (scheme == "https") 443 else 80
-            val port = uri.port
-            if (port >= 0 && port != defaultPort) "$scheme://$host:$port" else "$scheme://$host"
-        } catch (_: Exception) {
-            null
-        }
-    }
-
-    /** Fallback for keys that differ only in default-port spelling. */
-    private fun matchByAuthority(urls: JSONObject, pageUrl: String): String? {
-        val pageOrigin = originOf(pageUrl) ?: return null
-        val pageAuthority = Uri.parse(pageOrigin).authority ?: return null
-        val keys = urls.keys()
-        while (keys.hasNext()) {
-            val key = keys.next()
-            if (Uri.parse(key).authority == pageAuthority) return urls.optString(key, null)
-        }
-        return null
+        Log.w(TAG, "401 for $pageUrl; asking for the launch URL")
+        showSetup()
+        Toast.makeText(this, R.string.auth_error, Toast.LENGTH_LONG).show()
     }
 
     private fun showSetup() {
@@ -456,8 +384,6 @@ class MainActivity : Activity() {
         private const val KEY_URL = "url"
         private const val FILE_CHOOSER_REQUEST = 1001
         private const val MEDIA_PERMISSION_REQUEST = 1002
-        private const val HTTP_OK = 200
-        private const val MAX_AUTH_ATTEMPTS = 2
         private const val MAX_RENDERER_RESTARTS = 3
         private const val RENDERER_RESTART_WINDOW_MS = 60_000L
     }

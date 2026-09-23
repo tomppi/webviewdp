@@ -15,6 +15,12 @@ android {
         versionName = "1.4"
     }
 
+    // Committed on purpose, and used by both build types: a sideload build has
+    // to keep one identity, or Android refuses to install the next one over it
+    // (INSTALL_FAILED_UPDATE_INCOMPATIBLE) and getting past that uninstalls -
+    // taking the app's data. The certificate is public, so anyone with this
+    // repository can sign a build the device accepts as an update over the
+    // published one; see signing/README.md.
     signingConfigs {
         create("stable") {
             storeFile = file("../signing/debug.keystore")
@@ -29,6 +35,11 @@ android {
             signingConfig = signingConfigs.getByName("stable")
         }
         release {
+            // The published artifact is this variant: `android:debuggable` off,
+            // so no adb run-as, no heap dumps and no debug-only certificate
+            // trust. Signed with the same key as the debug builds already on the
+            // phone, so it installs over one and keeps its data.
+            signingConfig = signingConfigs.getByName("stable")
             isMinifyEnabled = false
         }
     }

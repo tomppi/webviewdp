@@ -51,8 +51,8 @@ android {
         applicationId = "com.webviewdp"
         minSdk = 26
         targetSdk = 35
-        versionCode = 5
-        versionName = "1.4"
+        versionCode = 6
+        versionName = "1.5"
     }
 
     // The published artifact is the release variant - `android:debuggable` off, so
@@ -94,4 +94,6 @@ android {
 
 dependencies {
     implementation("androidx.core:core:1.13.1")
+    // The proxy needs connection pooling, a cookie jar and streaming bodies.
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
 }

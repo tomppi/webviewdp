@@ -1,11 +1,22 @@
 # webviewdp
 
-A minimal Android WebView app that opens your DeepSeek Harness web UI over a
-Tailscale tailnet, giving you a dedicated app instead of the phone browser.
+A minimal Android WebView app for your DeepSeek Harness, reached over a Tailscale
+tailnet: a dedicated app instead of the phone browser, and one the harness treats
+as an operator.
 
-On first launch it shows a setup screen where you paste your harness URL
-(the Tailscale `https://<machine>.<tailnet>.ts.net/` address). The URL is
-stored on the device, so subsequent launches go straight to the harness.
+On first launch it shows a setup screen where you paste your launch URL (the
+Tailscale `https://<machine>.<tailnet>.ts.net/?token=…` address printed by
+[`dsh-launch.sh`](dsh-launch.sh) or [`dsh-url.sh`](dsh-url.sh)). The app signs in
+with it, keeps the session in an encrypted jar of its own, and from then on serves
+the harness to its own WebView from `http://127.0.0.1:<port>`.
+
+That loopback origin is the point. The harness decides what a page may do by
+where its document came from: a page the harness serves itself over the tailnet is
+not loopback, and gets no durable settings - every preference resets when the page
+reloads. A page from `127.0.0.1` is, so the harness treats this app exactly as it
+treats the browser on the machine itself, and settings stick. The listener accepts
+connections only from this device and relays to the real harness with the session
+attached, so the WebView never holds a credential and never loads a remote page.
 
 ## Requirements
 
@@ -16,16 +27,16 @@ stored on the device, so subsequent launches go straight to the harness.
 
 ## Download a build
 
-GitHub Actions builds a debug APK on every push to `main` (and on manual
+GitHub Actions builds the release APK on every push to `main` (and on manual
 `workflow_dispatch` runs):
 
 1. Go to the repo's **Actions** tab and open the latest **Build APK** run.
 2. Download the **webviewdp-apk** artifact.
 3. Unzip it and sideload `app-release.apk` onto the phone.
 
-The published APK is the release variant, signed with the committed
-[`signing/debug.keystore`](signing/README.md): not `android:debuggable`, and the
-same identity the previous builds had, so it installs over one in place.
+The published APK is the release variant, signed with the private release key
+described in [`signing/README.md`](signing/README.md): not `android:debuggable`,
+and the same identity the previous builds had, so it installs over one in place.
 
 ## Build locally (optional)
 
@@ -35,8 +46,10 @@ same identity the previous builds had, so it installs over one in place.
 ## Change or reset the URL
 
 - Clear the app's data (Settings > Apps > WebView DP > Clear data) to show the
-  setup screen again.
-- The app also returns to the setup screen if the saved URL fails to load.
+  setup screen again and forget the session.
+- The app also returns to the setup screen when the harness refuses its session
+  (the 30-day cookie expired, or the harness restarted with a new secret): paste a
+  fresh launch URL there.
 
 ## Authentication (harness 0.1.2-alpha.1 and newer)
 
@@ -46,11 +59,17 @@ harness can run code on, so nothing publishes it: you paste the launch URL once.
 
 1. [`dsh-launch.ps1`](dsh-launch.ps1) starts the server and catches the
    `?token=` URL it prints, one per authority (tailnet name, loopback).
-2. Paste that URL into this app. Loading it answers a 303 whose `Set-Cookie` is
-   a 30-day signed session, which the WebView keeps: after that the app opens the
-   plain address and needs no token - including across harness restarts.
-3. When the cookie is gone (30 days, or app data cleared) the app shows the setup
-   screen and says so, instead of a confusing 401 page.
+2. Paste that URL into this app. The app - not the WebView - exchanges it for the
+   303's `Set-Cookie`, a 30-day signed session it keeps encrypted at rest in the
+   Android Keystore and attaches to every relayed request. The token and the
+   cookie never enter the page, its history or its script context.
+3. When that session is gone (30 days, app data cleared, or a harness restart with
+   a new signing secret) the app shows the setup screen and says so, instead of a
+   confusing 401 page. The plain address is enough while the session lasts; the
+   `?token=` URL is needed only to get one.
+
+Upgrading from 1.4 needs no new paste: on first start the app adopts the cookie
+the old version left in the WebView's jar.
 
 Earlier versions read the token from `auth.json` in the harness's served dist.
 Every static asset is public, so that file was a working sign-in for anything
@@ -98,8 +117,14 @@ server runs as root under a systemd unit, that file is root-only and
 ## Notes
 
 - Keeps all navigation inside the WebView and supports file uploads.
-- No dependencies or analytics; it is a plain `WebView` with JavaScript and
-  DOM storage enabled.
+- One dependency, [OkHttp](https://square.github.io/okhttp/), for the relay:
+  connection pooling, a cookie jar, and streaming uploads and downloads. No
+  analytics.
+- The relay forwards every path unchanged and caches nothing; only the authority
+  markers the harness's request fence inspects are rewritten to the tailnet name.
+- Cleartext HTTP is permitted for `127.0.0.1` alone
+  (`app/src/main/res/xml/network_security_config.xml`); the harness hop stays
+  HTTPS with the system trust store and hostname verification.
 - **Background recovery:** Android can reclaim the WebView's renderer process
   while the app is in the background (memory pressure; heavier harness pages
   make this likely). The app notices via `onRenderProcessGone` and reloads the

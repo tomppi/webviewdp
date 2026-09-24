@@ -4,9 +4,7 @@ import android.Manifest
 import android.annotation.SuppressLint
 import android.app.Activity
 import android.content.ClipData
-import android.content.Context
 import android.content.Intent
-import android.content.SharedPreferences
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
@@ -19,6 +17,7 @@ import android.os.SystemClock
 import android.util.Log
 import android.view.View
 import android.view.inputmethod.EditorInfo
+import android.webkit.CookieManager
 import android.webkit.RenderProcessGoneDetail
 import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
@@ -32,12 +31,25 @@ import android.widget.Button
 import android.widget.EditText
 import android.widget.Toast
 
+/**
+ * The harness, on the phone.
+ *
+ * The WebView never loads the harness directly. It loads the loopback origin
+ * that [LoopbackProxy] serves, and the proxy relays to the real harness over
+ * Tailscale with the session this app holds. That is what makes the harness
+ * treat this page as the operator: a page the harness served itself over the
+ * tailnet is not loopback and gets no durable settings, while a page from
+ * 127.0.0.1 is, and does. Everything else here is the wrapper - setup screen,
+ * file chooser, renderer recovery, back handling.
+ */
 class MainActivity : Activity() {
 
     private lateinit var webView: WebView
     private lateinit var setupView: View
     private lateinit var urlInput: EditText
-    private lateinit var prefs: SharedPreferences
+    private lateinit var session: UpstreamSession
+    private var proxy: LoopbackProxy? = null
+    private var localUrl: String? = null
     private var filePathCallback: ValueCallback<Array<Uri>>? = null
     private var fileChooserParams: WebChromeClient.FileChooserParams? = null
     private var pendingFileChooser = false
@@ -50,7 +62,7 @@ class MainActivity : Activity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
-        prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        session = UpstreamSession(this)
         webView = findViewById(R.id.webview)
         setupView = findViewById(R.id.setup)
         urlInput = findViewById(R.id.url_input)
@@ -97,8 +109,10 @@ class MainActivity : Activity() {
                 errorResponse: WebResourceResponse,
             ) {
                 if (request.isForMainFrame && errorResponse.statusCode == 401) {
+                    // The proxy reports the same refusal where it belongs, once:
+                    // it asks for a fresh launch URL instead of reloading a page
+                    // that cannot sign in.
                     Log.d(TAG, "main frame 401 for ${request.url}")
-                    tryAuthorize(request.url.toString())
                 }
             }
 
@@ -126,7 +140,7 @@ class MainActivity : Activity() {
                     return true
                 }
                 runOnUiThread {
-                    val target = lastMainUrl ?: prefs.getString(KEY_URL, null)
+                    val target = lastMainUrl ?: localUrl
                     if (target != null) {
                         Log.i(TAG, "renderer gone: reloading $target")
                         view.loadUrl(target)
@@ -168,17 +182,11 @@ class MainActivity : Activity() {
             }
         }
 
-        val savedUrl = prefs.getString(KEY_URL, null)
+        val savedUrl = session.storedUrl()
         if (savedUrl != null) {
             urlInput.setText(savedUrl)
-            val restored = savedInstanceState?.let { webView.restoreState(it) }
-            if (restored != null) {
-                Log.d(TAG, "restored webview state")
-                setupView.visibility = View.GONE
-                webView.visibility = View.VISIBLE
-            } else {
-                open(savedUrl)
-            }
+            if (!session.hasSession()) adoptWebViewCookie(savedUrl)
+            if (session.hasSession()) launch() else showSetup()
         } else {
             showSetup()
         }
@@ -190,11 +198,13 @@ class MainActivity : Activity() {
         // Renderer death while backgrounded can otherwise leave a blank view;
         // onRenderProcessGone reloads it, but cover the no-URL case too.
         if (webView.visibility == View.VISIBLE && webView.url.isNullOrBlank()) {
-            val target = lastMainUrl ?: prefs.getString(KEY_URL, null)
+            val target = lastMainUrl ?: localUrl
             if (target != null) {
                 Log.i(TAG, "resumed with no URL; reloading $target")
                 rendererGoneCount = 0
                 open(target)
+            } else {
+                showSetup()
             }
         }
     }
@@ -255,17 +265,59 @@ class MainActivity : Activity() {
         }
     }
 
+    /**
+     * Sign in with what was pasted, then show the harness. A launch URL carries
+     * a one-time token; a bare origin is accepted while the stored session still
+     * covers it. Both happen off the main thread - the harness is remote.
+     */
     private fun connect() {
         val url = normalizeUrl(urlInput.text.toString())
         if (url.isEmpty()) {
             Toast.makeText(this, R.string.url_empty, Toast.LENGTH_SHORT).show()
             return
         }
-        prefs.edit().putString(KEY_URL, url).apply()
-        open(url)
+        setBusy(true)
+        Thread {
+            val result = session.signIn(url)
+            runOnUiThread {
+                setBusy(false)
+                result.fold(
+                    onSuccess = { launch() },
+                    onFailure = { failure ->
+                        Log.w(TAG, "sign-in failed: ${failure.message}")
+                        showSetup()
+                        Toast.makeText(this, R.string.sign_in_failed, Toast.LENGTH_LONG).show()
+                    },
+                )
+            }
+        }.start()
+    }
+
+    /** Start the loopback origin and point the WebView at it. */
+    private fun launch() {
+        val upstream = session.upstream
+        if (upstream == null) {
+            showSetup()
+            return
+        }
+        val listener = proxy ?: LoopbackProxy(
+            upstream = upstream,
+            client = session.proxyClient,
+            cookieHeader = { session.cookieHeader(it) },
+            onAuthFailure = { runOnUiThread { onSessionLost() } },
+        ).also { proxy = it }
+        val port = if (listener.port == 0) listener.start() else listener.port
+        open("http://127.0.0.1:$port/")
+    }
+
+    private fun setBusy(busy: Boolean) {
+        val button = findViewById<Button>(R.id.connect_button)
+        button.isEnabled = !busy
+        button.text = getString(if (busy) R.string.signing_in else R.string.connect)
     }
 
     private fun open(url: String) {
+        localUrl = url
         setupView.visibility = View.GONE
         webView.visibility = View.VISIBLE
         rendererGoneCount = 0
@@ -273,17 +325,28 @@ class MainActivity : Activity() {
     }
 
     /**
-     * The harness answered 401 for the main frame: this WebView holds no valid
-     * session, and nothing on the server can hand it one.
-     *
-     * It used to read the launch URL from `auth.json` in the served dist. Every
-     * static asset is public, so that file signed in anyone who could reach the
-     * port; the launcher no longer writes it, and this app no longer reads it.
-     * The launch URL is the user's to paste, and the 30-day cookie it mints
-     * keeps them signed in afterwards.
+     * Take over the cookie an older install left in the WebView's jar, so an
+     * update does not force a fresh launch URL on the user.
      */
-    private fun tryAuthorize(pageUrl: String) {
-        Log.w(TAG, "401 for $pageUrl; asking for the launch URL")
+    private fun adoptWebViewCookie(url: String) {
+        val upstream = session.upstream ?: return
+        try {
+            session.adopt(CookieManager.getInstance().getCookie(url), upstream)
+        } catch (e: Exception) {
+            Log.w(TAG, "cannot read the WebView cookie jar: ${e.message}")
+        }
+    }
+
+    /**
+     * The harness refused the session this app holds, so nothing on the server
+     * can hand it a new one: the user pastes a fresh launch URL.
+     *
+     * It used to read that URL from `auth.json` in the served dist. Every static
+     * asset is public, so the file signed in anyone who could reach the port;
+     * the launcher no longer writes it, and this app no longer reads it.
+     */
+    private fun onSessionLost() {
+        Log.w(TAG, "the harness refused the stored session")
         showSetup()
         Toast.makeText(this, R.string.auth_error, Toast.LENGTH_LONG).show()
     }
@@ -368,20 +431,14 @@ class MainActivity : Activity() {
         }
     }
 
-    override fun onSaveInstanceState(outState: Bundle) {
-        super.onSaveInstanceState(outState)
-        webView.saveState(outState)
-    }
-
     override fun onDestroy() {
+        proxy?.stop()
         webView.destroy()
         super.onDestroy()
     }
 
     companion object {
         private const val TAG = "WebViewDP"
-        private const val PREFS_NAME = "webviewdp"
-        private const val KEY_URL = "url"
         private const val FILE_CHOOSER_REQUEST = 1001
         private const val MEDIA_PERMISSION_REQUEST = 1002
         private const val MAX_RENDERER_RESTARTS = 3
